@@ -2,7 +2,7 @@ require('dotenv').config();
 const express=require('express'),cors=require('cors');
 const bc=require('./bc'),checker=require('./checker'),storeStatus=require('./store-status'),tunnel=require('./tunnel');
 
-const app=express(),PORT=Number(process.env.PORT||9922)||9922,BOT_TOKEN=String(process.env.BOT_TOKEN||'').trim();
+const app=express(),PORT=Number(process.env.PORT||9922)||9922,BOT_TOKEN=String(process.env.BOT_TOKEN||'').trim(),LATEST_EXTENSION_VERSION=String(process.env.LATEST_EXTENSION_VERSION||'1.0.1').trim();
 app.use(cors());
 app.use(express.json());
 
@@ -12,6 +12,12 @@ app.use((req,res,next)=>{
  if(!BOT_TOKEN)return next();
  if(req.get('X-Bot-Token')===BOT_TOKEN)return next();
  res.status(401).json({ok:false,error:'Невалиден достъп до backend-а'});
+});
+
+app.use((req,res,next)=>{
+ const current=String(req.get('X-Client-Version')||'').trim();
+ if(current===LATEST_EXTENSION_VERSION)return next();
+ res.status(426).json({ok:false,error:`Нужна е последната версия ${LATEST_EXTENSION_VERSION}.`,code:'UPDATE_REQUIRED',currentVersion:current||null,latestVersion:LATEST_EXTENSION_VERSION});
 });
 
 app.post('/run/start',(req,res)=>{

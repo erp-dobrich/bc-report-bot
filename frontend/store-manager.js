@@ -1,4 +1,4 @@
-(()=>{
+(async()=>{if(!(await (globalThis.__BC_VERSION_GATE__||Promise.resolve(false))))return;
  if(top!==window)return;
  const E=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
  const api=(path,body)=>new Promise((ok,no)=>chrome.runtime.sendMessage({type:'API',path,method:body?'POST':'GET',body},r=>{const e=chrome.runtime.lastError?.message;if(e)no(Error(e));else r?.ok?ok(r.data):no(Error(r?.error||r?.data?.error||'Операцията не успя'))}));
