@@ -1,0 +1,10 @@
+backend/.env
+backend/node_modules/
+bot-profile/
+backend/bot-profile/
+/backend/data/stores.db
+*.log
+backend/*.log
+Thumbs.db
+.DS_Store
+.vscode/

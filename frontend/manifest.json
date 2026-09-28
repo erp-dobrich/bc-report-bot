@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "BC Report Checker",
+  "version": "1.0.0",
+  "permissions": ["storage"],
+  "host_permissions": ["https://bot-config.erp-admin.workers.dev/*"],
+  "background": {"service_worker": "background.js"},
+  "content_scripts": [{
+    "matches": ["https://ovcharovols.isystems.cloud:41118/OVCHAROVO/*"],
+    "js": ["content.js","store-status.js","store-manager.js"],
+    "run_at": "document_idle"
+  }]
+}
