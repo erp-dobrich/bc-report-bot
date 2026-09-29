@@ -2,7 +2,7 @@ require('dotenv').config();
 const express=require('express'),cors=require('cors');
 const bc=require('./bc'),checker=require('./checker'),storeStatus=require('./store-status'),tunnel=require('./tunnel');
 
-const app=express(),PORT=Number(process.env.PORT||9922)||9922,BOT_TOKEN=String(process.env.BOT_TOKEN||'').trim(),LATEST_EXTENSION_VERSION=String(process.env.LATEST_EXTENSION_VERSION||'1.0.1').trim();
+const app=express(),PORT=Number(process.env.PORT||9922)||9922,BOT_TOKEN=String(process.env.BOT_TOKEN||'').trim(),LATEST_EXTENSION_VERSION=String(require('../version.json').version||'').trim();
 app.use(cors());
 app.use(express.json());
 
