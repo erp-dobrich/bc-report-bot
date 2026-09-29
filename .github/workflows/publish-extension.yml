@@ -1,10 +1,85 @@
-﻿name: Test Workflow
+﻿name: Publish Chrome Extension
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - version.json
 
 jobs:
-  test:
+  publish:
     runs-on: ubuntu-latest
+
     steps:
-      - run: echo "Workflow OK"
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify version
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./version.json').version")
+          MANIFEST=$(node -p "require('./frontend/manifest.json').version")
+          test "$VERSION" = "$MANIFEST"
+          echo "Version: $VERSION"
+
+      - name: Build ZIP
+        shell: bash
+        run: |
+          cd frontend
+          zip -r ../frontend-upload.zip . -x "*.DS_Store"
+
+      - name: Get Chrome Web Store access token
+        id: auth
+        shell: bash
+        env:
+          SA_JSON: ${{ secrets.CWS_SERVICE_ACCOUNT_JSON }}
+        run: |
+          node <<'NODE'
+          const fs=require('fs'),crypto=require('crypto');
+          (async()=>{
+            const c=JSON.parse(process.env.SA_JSON),now=Math.floor(Date.now()/1000);
+            const b=o=>Buffer.from(JSON.stringify(o)).toString('base64url');
+            const unsigned=b({alg:'RS256',typ:'JWT'})+'.'+b({iss:c.client_email,scope:'https://www.googleapis.com/auth/chromewebstore',aud:c.token_uri||'https://oauth2.googleapis.com/token',iat:now,exp:now+3600});
+            const sig=crypto.sign('RSA-SHA256',Buffer.from(unsigned),c.private_key).toString('base64url');
+            const body=new URLSearchParams({grant_type:'urn:ietf:params:oauth:grant-type:jwt-bearer',assertion:unsigned+'.'+sig});
+            const r=await fetch(c.token_uri||'https://oauth2.googleapis.com/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body});
+            const j=await r.json();
+            if(!r.ok||!j.access_token)throw Error(JSON.stringify(j));
+            fs.appendFileSync(process.env.GITHUB_OUTPUT,`token=${j.access_token}\n`);
+          })().catch(e=>{console.error(e);process.exit(1)});
+          NODE
+
+      - name: Upload package
+        shell: bash
+        env:
+          TOKEN: ${{ steps.auth.outputs.token }}
+          PUBLISHER_ID: ${{ vars.CWS_PUBLISHER_ID }}
+          EXTENSION_ID: ${{ vars.CWS_EXTENSION_ID }}
+        run: |
+          UPLOAD_URL="https://chromewebstore.googleapis.com/upload/v2/publishers/$PUBLISHER_ID/items/$EXTENSION_ID:upload"
+          STATUS_URL="https://chromewebstore.googleapis.com/v2/publishers/$PUBLISHER_ID/items/$EXTENSION_ID:fetchStatus"
+          RESP=$(curl --fail-with-body -sS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/zip" -T frontend-upload.zip "$UPLOAD_URL")
+          echo "$RESP"
+          STATE=$(node -e "const x=JSON.parse(process.argv[1]);console.log(x.uploadState||'')" "$RESP")
+          if [ "$STATE" = "IN_PROGRESS" ]; then
+            for i in {1..30}; do
+              sleep 10
+              RESP=$(curl --fail-with-body -sS -H "Authorization: Bearer $TOKEN" "$STATUS_URL")
+              echo "$RESP"
+              STATE=$(node -e "const x=JSON.parse(process.argv[1]);console.log(x.lastAsyncUploadState||'')" "$RESP")
+              [ "$STATE" = "SUCCEEDED" ] && break
+              [ "$STATE" = "FAILED" ] && exit 1
+            done
+          fi
+          [ "$STATE" = "SUCCEEDED" ] || { echo "Upload state: $STATE"; exit 1; }
+
+      - name: Submit for review
+        shell: bash
+        env:
+          TOKEN: ${{ steps.auth.outputs.token }}
+          PUBLISHER_ID: ${{ vars.CWS_PUBLISHER_ID }}
+          EXTENSION_ID: ${{ vars.CWS_EXTENSION_ID }}
+        run: |
+          curl --fail-with-body -sS -X POST -H "Authorization: Bearer $TOKEN" "https://chromewebstore.googleapis.com/v2/publishers/$PUBLISHER_ID/items/$EXTENSION_ID:publish"
