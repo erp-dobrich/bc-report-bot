@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BC Report Checker
 // @namespace    https://github.com/erp-dobrich/bc-report-bot
-// @version      1.1.1
+// @version      1.1.2
 // @description  BC Report Checker - Tampermonkey frontend
 // @match        https://ovcharovols.isystems.cloud:41118/OVCHAROVO/*
 // @run-at       document-idle
