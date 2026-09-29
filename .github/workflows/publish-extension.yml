@@ -1,44 +1,8 @@
-      - name: "Upload package"
-        shell: bash
-        env:
-          PUBLISHER_ID: ${{ vars.CWS_PUBLISHER_ID }}
-          EXTENSION_ID: ${{ vars.CWS_EXTENSION_ID }}
-        run: |
-          test -n "$PUBLISHER_ID" || { echo 'CWS_PUBLISHER_ID missing'; exit 1; }
-          test -n "$EXTENSION_ID" || { echo 'CWS_EXTENSION_ID missing'; exit 1; }
-          UPLOAD_URL="https://chromewebstore.googleapis.com/upload/v2/publishers/$PUBLISHER_ID/items/$EXTENSION_ID:upload"
-          STATUS_URL="https://chromewebstore.googleapis.com/v2/publishers/$PUBLISHER_ID/items/$EXTENSION_ID:fetchStatus"
-          R=$(curl --fail-with-body -sS -X POST \
-            -H "Authorization: Bearer $CWS_TOKEN" \
-            -H 'Content-Type: application/zip' \
-            -T frontend-upload.zip \
-            "$UPLOAD_URL")
-          echo "$R" | jq .
-          STATE=$(echo "$R" | jq -r '.uploadState // empty')
-          if [ "$STATE" = 'IN_PROGRESS' ]; then
-            for i in $(seq 1 30); do
-              sleep 10
-              S=$(curl --fail-with-body -sS \
-                -H "Authorization: Bearer $CWS_TOKEN" \
-                "$STATUS_URL")
-              STATE=$(echo "$S" | jq -r '.lastAsyncUploadState // empty')
-              echo "Upload state: $STATE"
-              [ "$STATE" = 'SUCCEEDED' ] && break
-              [ "$STATE" = 'FAILED' ] && { echo "$S" | jq .; exit 1; }
-            done
-          fi
-          [ "$STATE" = 'SUCCEEDED' ] || { echo "Upload failed/incomplete: $STATE"; exit 1; }
+﻿on:
+  workflow_dispatch:
 
-      - name: "Submit for review"
-        shell: bash
-        env:
-          PUBLISHER_ID: ${{ vars.CWS_PUBLISHER_ID }}
-          EXTENSION_ID: ${{ vars.CWS_EXTENSION_ID }}
-        run: |
-          R=$(curl --fail-with-body -sS -X POST \
-            -H "Authorization: Bearer $CWS_TOKEN" \
-            -H 'Content-Type: application/json' \
-            -d '{}' \
-            "https://chromewebstore.googleapis.com/v2/publishers/$PUBLISHER_ID/items/$EXTENSION_ID:publish")
-          echo "$R" | jq .
-          echo "Submitted version $VERSION for review."
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Workflow OK"
