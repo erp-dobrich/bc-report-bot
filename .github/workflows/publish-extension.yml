@@ -1,34 +1,4 @@
-      - name: Build ZIP
-        shell: bash
-        run: |
-          cd frontend
-          zip -qr ../frontend-upload.zip .
-
-      - name: Authenticate to Chrome Web Store
-        shell: bash
-        env:
-          CWS_SERVICE_ACCOUNT_JSON: ${{ secrets.CWS_SERVICE_ACCOUNT_JSON }}
-        run: |
-          ASSERTION=$(node <<'NODE'
-          const crypto=require('crypto');
-          const sa=JSON.parse(process.env.CWS_SERVICE_ACCOUNT_JSON);
-          const b64=x=>Buffer.from(JSON.stringify(x)).toString('base64url');
-          const now=Math.floor(Date.now()/1000),aud=sa.token_uri||'https://oauth2.googleapis.com/token';
-          const unsigned=b64({alg:'RS256',typ:'JWT'})+'.'+b64({iss:sa.client_email,scope:'https://www.googleapis.com/auth/chromewebstore',aud,iat:now,exp:now+3600});
-          const sig=crypto.sign('RSA-SHA256',Buffer.from(unsigned),sa.private_key).toString('base64url');
-          process.stdout.write(unsigned+'.'+sig);
-          NODE
-          )
-          TOKEN_JSON=$(curl -fsS 'https://oauth2.googleapis.com/token' \
-            -H 'Content-Type: application/x-www-form-urlencoded' \
-            --data-urlencode 'grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer' \
-            --data-urlencode "assertion=$ASSERTION")
-          TOKEN=$(printf '%s' "$TOKEN_JSON" | jq -r '.access_token // empty')
-          test -n "$TOKEN" || { echo "$TOKEN_JSON"; exit 1; }
-          echo "::add-mask::$TOKEN"
-          echo "CWS_TOKEN=$TOKEN" >> "$GITHUB_ENV"
-
-      - name: Upload package
+      - name: "Upload package"
         shell: bash
         env:
           PUBLISHER_ID: ${{ vars.CWS_PUBLISHER_ID }}
@@ -36,39 +6,39 @@
         run: |
           test -n "$PUBLISHER_ID" || { echo 'CWS_PUBLISHER_ID missing'; exit 1; }
           test -n "$EXTENSION_ID" || { echo 'CWS_EXTENSION_ID missing'; exit 1; }
-          BASE='https://chromewebstore.googleapis.com'
-          URL="$BASE/upload/v2/publishers/$PUBLISHER_ID/items/$EXTENSION_ID:upload"
-          STATUS_URL="$BASE/v2/publishers/$PUBLISHER_ID/items/$EXTENSION_ID:fetchStatus"
-
-          R=$(curl -fsS -X POST \
+          UPLOAD_URL="https://chromewebstore.googleapis.com/upload/v2/publishers/$PUBLISHER_ID/items/$EXTENSION_ID:upload"
+          STATUS_URL="https://chromewebstore.googleapis.com/v2/publishers/$PUBLISHER_ID/items/$EXTENSION_ID:fetchStatus"
+          R=$(curl --fail-with-body -sS -X POST \
             -H "Authorization: Bearer $CWS_TOKEN" \
             -H 'Content-Type: application/zip' \
-            --data-binary @frontend-upload.zip \
-            "$URL")
+            -T frontend-upload.zip \
+            "$UPLOAD_URL")
           echo "$R" | jq .
           STATE=$(echo "$R" | jq -r '.uploadState // empty')
-
           if [ "$STATE" = 'IN_PROGRESS' ]; then
             for i in $(seq 1 30); do
               sleep 10
-              S=$(curl -fsS -H "Authorization: Bearer $CWS_TOKEN" "$STATUS_URL")
+              S=$(curl --fail-with-body -sS \
+                -H "Authorization: Bearer $CWS_TOKEN" \
+                "$STATUS_URL")
               STATE=$(echo "$S" | jq -r '.lastAsyncUploadState // empty')
               echo "Upload state: $STATE"
               [ "$STATE" = 'SUCCEEDED' ] && break
               [ "$STATE" = 'FAILED' ] && { echo "$S" | jq .; exit 1; }
             done
           fi
-
           [ "$STATE" = 'SUCCEEDED' ] || { echo "Upload failed/incomplete: $STATE"; exit 1; }
 
-      - name: Submit for review
+      - name: "Submit for review"
         shell: bash
         env:
           PUBLISHER_ID: ${{ vars.CWS_PUBLISHER_ID }}
           EXTENSION_ID: ${{ vars.CWS_EXTENSION_ID }}
         run: |
-          R=$(curl -fsS -X POST \
+          R=$(curl --fail-with-body -sS -X POST \
             -H "Authorization: Bearer $CWS_TOKEN" \
+            -H 'Content-Type: application/json' \
+            -d '{}' \
             "https://chromewebstore.googleapis.com/v2/publishers/$PUBLISHER_ID/items/$EXTENSION_ID:publish")
           echo "$R" | jq .
           echo "Submitted version $VERSION for review."
