@@ -4,9 +4,7 @@ async function cfg(force=false){if(!force&&cc&&Date.now()-ct<15000)return cc;con
 function vs(c){const current=chrome.runtime.getManifest().version,latest=String(c?.latestVersion||'').trim();if(!latest)return{ok:false,error:'Липсва latestVersion',code:'VERSION_CONFIG_ERROR',data:{currentVersion:current}};const data={currentVersion:current,latestVersion:latest,minimumVersion:String(c?.minimumVersion||latest),updateUrl:String(c?.updateUrl||'').trim(),updatedAt:c?.updatedAt||null};return vc(current,latest)!==0?{ok:false,error:`Версия ${current} е заключена. Нужна е ${latest}.`,code:'UPDATE_REQUIRED',data}:{ok:true,data}}
 async function rememberTab(id){if(!Number.isInteger(id))return;const x=await chrome.storage.local.get(UT),a=Array.isArray(x[UT])?x[UT]:[];if(!a.includes(id))await chrome.storage.local.set({[UT]:[...a,id].slice(-20)})}
 async function reloadRememberedTabs(){const x=await chrome.storage.local.get(UT),a=Array.isArray(x[UT])?x[UT]:[];await chrome.storage.local.remove(UT);await Promise.allSettled(a.filter(Number.isInteger).map(id=>chrome.tabs.reload(id)))}
-async function notify(tabId,r){if(!Number.isInteger(tabId))return;await rememberTab(tabId);chrome.tabs.sendMessage(tabId,{type:'BC_VERSION_REQUIRED',result:r}).catch(()=>{})}
-async function openUrl(u){u=String(u||'').trim();if(!/^https:\/\//i.test(u))return false;await chrome.tabs.create({url:u});return true}
-async function update(c,manual=true,tabId=null){const s=vs(c);if(s.ok)return{ok:true,data:{...s.data,status:'current'}};if(s.code!=='UPDATE_REQUIRED')return s;await rememberTab(tabId);try{const r=await chrome.runtime.requestUpdateCheck();if(r?.status==='update_available')return{ok:true,data:{...s.data,status:'update_available',availableVersion:r.version||s.data.latestVersion}};if(r?.status==='throttled')return{ok:true,data:{...s.data,status:'throttled'}}}catch{}if(manual&&await openUrl(s.data.updateUrl).catch(()=>false))return{ok:true,data:{...s.data,status:'manual_opened'}};return{ok:false,error:'Автоматичната актуализация още не е налична.',code:'UPDATE_UNAVAILABLE',data:s.data}}
+async function update(c,manual=true,tabId=null){const s=vs(c);if(s.ok)return{ok:true,data:{...s.data,status:'current'}};if(s.code!=='UPDATE_REQUIRED')return s;await rememberTab(tabId);try{const r=await chrome.runtime.requestUpdateCheck();if(r?.status==='update_available')return{ok:true,data:{...s.data,status:'update_available',availableVersion:r.version||s.data.latestVersion}};if(r?.status==='throttled')return{ok:true,data:{...s.data,status:'throttled'}}}catch{}return{ok:false,error:'Новата версия още не е налична от Chrome Web Store.',code:'UPDATE_UNAVAILABLE',data:s.data}}
 async function auto(){try{const c=await cfg(true),s=vs(c);if(!s.ok&&s.code==='UPDATE_REQUIRED')await update(c,false)}catch{}}
 chrome.runtime.onUpdateAvailable.addListener(()=>chrome.runtime.reload());
 chrome.runtime.onStartup.addListener(auto);
@@ -14,11 +12,11 @@ chrome.runtime.onInstalled.addListener(d=>{auto();if(d.reason==='update')reloadR
 chrome.runtime.onMessage.addListener((m,s,reply)=>{if(!['API','STORE_STATE','CHECK_STATE','VERSION','UPDATE','AUTO_UPDATE'].includes(m.type))return;(async()=>{try{
  if(m.type==='STORE_STATE'||m.type==='CHECK_STATE'){const key=K[m.type],st=chrome.storage.session;if(m.action==='get'){const x=await st.get(key);return reply({ok:true,data:x[key]||null})}if(m.action==='set'){await st.set({[key]:m.data});return reply({ok:true})}if(m.action==='clear'){await st.remove(key);return reply({ok:true})}throw Error('Невалидна state операция')}
  const c=await cfg(m.type==='VERSION'||m.type==='UPDATE'||m.type==='AUTO_UPDATE');
- if(m.type==='VERSION'){const v=vs(c);if(!v.ok&&v.code==='UPDATE_REQUIRED')await rememberTab(s.tab?.id);return reply(v)}
+ if(m.type==='VERSION')return reply(vs(c))
  if(m.type==='UPDATE')return reply(await update(c,true,s.tab?.id));
  if(m.type==='AUTO_UPDATE')return reply(await update(c,false,s.tab?.id));
- const b=vs(c);if(!b.ok){if(b.code==='UPDATE_REQUIRED'){await notify(s.tab?.id,b);update(c,false,s.tab?.id).catch(()=>{})}return reply(b)}
+ const b=vs(c);if(!b.ok)return reply(b)
  const r=await fetch(A+m.path,{method:m.method||'GET',headers:{'Content-Type':'application/json','X-Client-Version':chrome.runtime.getManifest().version},body:m.body?JSON.stringify(m.body):undefined,cache:'no-store'}),data=await r.json().catch(()=>({error:`HTTP ${r.status}`}));
- if(r.status===426){cc=null;const f=await cfg(true).catch(()=>null),st=f?vs(f):null,out={ok:false,error:data?.error||st?.error||'Нужна е актуализация',code:'UPDATE_REQUIRED',data:{...(st?.data||{}),...(data||{})}};await notify(s.tab?.id,out);if(f)update(f,false,s.tab?.id).catch(()=>{});return reply(out)}
+ if(r.status===426){cc=null;const f=await cfg(true).catch(()=>null),st=f?vs(f):null,out={ok:false,error:data?.error||st?.error||'Нужна е актуализация',code:'UPDATE_REQUIRED',data:{...(st?.data||{}),...(data||{})}};return reply(out)}
  reply({ok:r.ok,data,error:r.ok?undefined:(data?.error||`HTTP ${r.status}`)})
  }catch(e){reply({ok:false,error:e.message||'Сървърът не е достъпен',code:'VERSION_CHECK_FAILED'})}})();return true});
