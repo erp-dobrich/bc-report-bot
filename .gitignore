@@ -3,6 +3,12 @@ backend/node_modules/
 bot-profile/
 backend/bot-profile/
 /backend/data/stores.db
+/backend/data/clients.db
+/backend/data/jobs.db
+/backend/data/activity.db
+/backend/data/*.db-wal
+/backend/data/*.db-shm
+/frontend-upload.zip
 *.log
 backend/*.log
 Thumbs.db

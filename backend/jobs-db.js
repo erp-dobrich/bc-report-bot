@@ -1,0 +1,10 @@
+const fs=require('fs'),path=require('path'),crypto=require('crypto'),DB=path.join(__dirname,'data','jobs.db');
+function open(){let DatabaseSync;try{({DatabaseSync}=require('node:sqlite'))}catch{throw Error('За jobs.db е нужен Node.js 22.5 или по-нов')}fs.mkdirSync(path.dirname(DB),{recursive:true});const db=new DatabaseSync(DB);db.exec("PRAGMA busy_timeout=5000;CREATE TABLE IF NOT EXISTS jobs(job_id TEXT PRIMARY KEY,action TEXT NOT NULL,device_id TEXT NOT NULL DEFAULT '',store_code TEXT NOT NULL DEFAULT '',version TEXT NOT NULL DEFAULT '',started_at INTEGER NOT NULL,finished_at INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL,error TEXT NOT NULL DEFAULT '')");return db}
+const s=(v,n=1000)=>String(v||'').trim().slice(0,n);
+function start(x={}){const id=crypto.randomUUID(),db=open();try{db.prepare('INSERT INTO jobs(job_id,action,device_id,store_code,version,started_at,status) VALUES(?,?,?,?,?,?,?)').run(id,s(x.action,80),s(x.deviceId,120),s(x.storeCode,20),s(x.version,40),Date.now(),'RUNNING');return id}finally{db.close()}}
+function finish(id,status='OK',error=''){if(!id)return;const db=open();try{db.prepare("UPDATE jobs SET finished_at=?,status=?,error=? WHERE job_id=? AND status='RUNNING'").run(Date.now(),s(status,30),s(error,2000),String(id))}finally{db.close()}}
+function interruptStale(){const db=open();try{return Number(db.prepare("UPDATE jobs SET finished_at=?,status='INTERRUPTED',error='Backend restarted while job was marked RUNNING' WHERE status='RUNNING'").run(Date.now()).changes)||0}finally{db.close()}}
+function active(){const db=open();try{return db.prepare("SELECT * FROM jobs WHERE status='RUNNING' ORDER BY started_at").all()}finally{db.close()}}
+function activeCount(){const db=open();try{return Number(db.prepare("SELECT COUNT(*) n FROM jobs WHERE status='RUNNING'").get().n)||0}finally{db.close()}}
+function list(limit=500){limit=Math.max(1,Math.min(5000,Number(limit)||500));const db=open();try{return db.prepare('SELECT * FROM jobs ORDER BY started_at DESC LIMIT ?').all(limit)}finally{db.close()}}
+module.exports={start,finish,interruptStale,active,activeCount,list};
