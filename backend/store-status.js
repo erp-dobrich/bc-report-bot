@@ -24,12 +24,21 @@ const value=x=>String(x?.stringValue??x?.StringValue??'').trim();
 function field(c,n){return value(c[Object.keys(c).find(k=>k.endsWith('_c'+n))])}
 function dateNumber(s){const m=/^(\d{2})\.(\d{2})\.(\d{4})$/.exec(s);if(!m)return 0;const[d,mo,y]=m.slice(1).map(Number),v=new Date(Date.UTC(y,mo-1,d));return v.getUTCFullYear()===y&&v.getUTCMonth()===mo-1&&v.getUTCDate()===d?y*10000+mo*100+d:0}
 
-function postedAfter(now=new Date()){
- const p=Object.fromEntries(new Intl.DateTimeFormat('en-GB',{timeZone:'Europe/Sofia',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(now).map(x=>[x.type,x.value]));let y=+p.year,m=+p.month-1;if(!m){m=12;y--}const d=Math.min(+p.day,new Date(Date.UTC(y,m,0)).getUTCDate());return`${pad(d)}.${pad(m)}.${y}`
+function sofiaToday(now=new Date()){
+ const p=Object.fromEntries(new Intl.DateTimeFormat('en-GB',{timeZone:'Europe/Sofia',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(now).map(x=>[x.type,x.value]));return{year:+p.year,month:+p.month,day:+p.day}
+}
+function monthScope(requested='',now=new Date()){
+ const t=sofiaToday(now),current=`${pad(t.month)}.${t.year}`,prevDate=new Date(Date.UTC(t.year,t.month-2,1)),previous=`${pad(prevDate.getUTCMonth()+1)}.${prevDate.getUTCFullYear()}`,month=/^\d{2}\.\d{4}$/.test(String(requested||''))?String(requested):current;
+ if(month!==current&&month!==previous)throw Object.assign(Error('Позволени са само текущият и предишният месец'),{status:400});
+ const[m,y]=month.split('.').map(Number),currentMonth=month===current,last=currentMonth?Math.max(0,t.day-1):new Date(Date.UTC(y,m,0)).getUTCDate(),asOfDay=currentMonth?t.day:last;
+ return{month,m,y,last,asOfDay,from:`01.${month}`,to:last?`${pad(last)}.${month}`:''}
+}
+function postedAfter(from){
+ const m=/^\d{2}\.(\d{2})\.(\d{4})$/.exec(String(from||''));if(!m)return'01.01.2000';let month=Number(m[1])-1,year=Number(m[2]);if(month<1){month=12;year--}const day=new Date(Date.UTC(year,month,0)).getUTCDate();return`${pad(day)}.${pad(month)}.${year}`
 }
 function listUrl(page,from,to,stores){
  const u=new URL(bc.HOST);u.search='';let filter=`'Store No.' IS '${stores.join('|')}' AND 'Trans. Ending Date' IS '${from}..${to}'`;
- if(page===PAGES[1])filter+=` AND 'LSC Posted Statement'.'Posted Date' IS '>${postedAfter()}'`;
+ if(page===PAGES[1])filter+=` AND 'LSC Posted Statement'.'Posted Date' IS '>${postedAfter(from)}'`;
  for(const[k,v]of Object.entries({page,company:'Ovcharovo_EUR',dc:0,filter}))u.searchParams.set(k,v);
  return u.toString().replace(/\+/g,'%20');
 }
@@ -170,11 +179,10 @@ async function readExactReport(page,date,store,report,accept=()=>true,fastMs=500
   return rows;
  }finally{await p.close().catch(()=>{})}
 }
-function calendar(now,unposted,posted,stores){
- const{year:y,month:m,day:d}=Object.fromEntries(new Intl.DateTimeFormat('en-GB',{timeZone:'Europe/Sofia',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(now).map(x=>[x.type,x.value]));
- const at=(bucket,date)=>bucket instanceof Map?(bucket.get(date)||[]):bucket instanceof Set?(bucket.has(date)?['']:[]):[];
- return{month:`${m}.${y}`,asOf:`${d}.${m}.${y}`,stores:stores.map(s=>({store:s.code,name:s.name,city:s.city,days:Array.from({length:+d-1},(_,i)=>{
-  const day=i+1,date=`${pad(day)}.${m}.${y}`,p=at(posted[s.code],date),u=at(unposted[s.code],date),reports=p.length?p:u,status=p.length?'green':u.length?'yellow':'red',x={day,status};
+function calendar(scope,unposted,posted,stores){
+ const{month,m,y,last,asOfDay}=scope,mm=pad(m),at=(bucket,date)=>bucket instanceof Map?(bucket.get(date)||[]):bucket instanceof Set?(bucket.has(date)?['']:[]):[];
+ return{month,asOf:`${pad(asOfDay)}.${mm}.${y}`,stores:stores.map(s=>({store:s.code,name:s.name,city:s.city,days:Array.from({length:last},(_,i)=>{
+  const day=i+1,date=`${pad(day)}.${mm}.${y}`,p=at(posted[s.code],date),u=at(unposted[s.code],date),reports=p.length?p:u,status=p.length?'green':u.length?'yellow':'red',x={day,status};
   if(reports.length===1&&reports[0])x.report=reports[0];else if(reports.length>1)x.reports=reports;
   return x;
  })}))};
@@ -192,15 +200,15 @@ async function readBatches(page,from,to,stores,size=10){
  }
  return out;
 }
-async function check(){
+async function check(_body,req){
  if(checking||activeCreates.size||activePosts.size)throw Error('Проверката, създаването или осчетоводяването вече работи');checking=true;const start=Date.now();
  try{
-  const now=new Date(),stores=getStores(),codes=stores.map(s=>s.code),empty=()=>Object.fromEntries(codes.map(s=>[s,new Map()])),base=calendar(now,empty(),empty(),stores),last=base.stores[0]?.days.length||0;
+  const scope=monthScope(req?.query?.month),stores=getStores(),codes=stores.map(s=>s.code),empty=()=>Object.fromEntries(codes.map(s=>[s,new Map()])),base=calendar(scope,empty(),empty(),stores),last=scope.last;
   if(!last||!codes.length)return base;
-  const from='01.'+base.month,to=pad(last)+'.'+base.month;
-  console.log(`STORE-STATUS URL | магазини: ${codes.length} | ${from}..${to}`);
+  const from=scope.from,to=scope.to;
+  console.log(`STORE-STATUS URL | ${scope.month} | магазини: ${codes.length} | ${from}..${to}`);
   const unposted=await readBatches(PAGES[0],from,to,codes,10),posted=await readBatches(PAGES[1],from,to,codes,10);
-  const result=calendar(now,unposted,posted,stores);
+  const result=calendar(scope,unposted,posted,stores);
   for(const store of result.stores)for(const day of store.days)if(day.status==='yellow'&&fs.existsSync(lockPath(store.store,pad(day.day)+'.'+result.month)))day.resume=true;
   console.log('STORE-STATUS URL | ОБЩО '+sec(start));return result;
  }finally{checking=false}
