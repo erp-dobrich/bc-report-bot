@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="bg">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BC Report - личен ключ</title>
+<style>
+ body{width:320px;margin:0;padding:18px;box-sizing:border-box;font:13px/1.45 Arial,sans-serif;color:#173d35;background:#f8fbfa}
+ h1{font-size:17px;margin:0 0 8px}
+ p{margin:0 0 12px;color:#526b65}
+ label{display:block;margin:0 0 6px;font-weight:bold}
+ input{width:100%;box-sizing:border-box;padding:10px;border:1px solid #cbded8;border-radius:8px;font-size:13px}
+ .buttons{display:flex;gap:8px;margin-top:10px}
+ button{flex:1;padding:9px;border:0;border-radius:8px;font-weight:bold;cursor:pointer;background:#0b8062;color:white}
+ button.secondary{background:#e2eee9;color:#145e4b}
+ #msg{min-height:36px;margin-top:12px;white-space:pre-wrap;color:#4b655c}
+</style>
+</head>
+<body>
+<h1>BC Report</h1>
+<p>Въведи личния ключ веднъж. Няма проверки за версия и обновления.</p>
+<label for="token">Личен ключ (CLIENT_TOKEN)</label>
+<input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="Постави ключа от Cloudflare">
+<div class="buttons">
+<button id="save">Запази</button>
+<button id="test" class="secondary">Провери връзката</button>
+</div>
+<div id="msg" role="status" aria-live="polite"></div>
+<script src="popup.js"></script>
+</body>
+</html>

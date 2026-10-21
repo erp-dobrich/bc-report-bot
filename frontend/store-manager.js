@@ -1,4 +1,4 @@
-(async()=>{if(!(await (globalThis.__BC_VERSION_GATE__||Promise.resolve(false))))return;
+(()=>{
  if(top!==window)return;
  const E=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
  const api=(path,body)=>new Promise((ok,no)=>chrome.runtime.sendMessage({type:'API',path,method:body?'POST':'GET',body},r=>{const e=chrome.runtime.lastError?.message;if(e)no(Error(e));else r?.ok?ok(r.data):no(Error(r?.error||r?.data?.error||'Операцията не успя'))}));
@@ -42,5 +42,6 @@
   box.querySelector('.sm-body').onchange=async e=>{if(blocked()||e.target.type!=='checkbox')return;const row=e.target.closest('.sm-row'),msg=box.querySelector('.sm-msg');try{await api('/stores/active',{code:row.dataset.code,active:e.target.checked});msg.style.color='#168057';msg.textContent='Запазено.'}catch(x){e.target.checked=!e.target.checked;msg.style.color='#b74750';msg.textContent=x.message}};
   box.querySelector('.sm-body').onclick=async e=>{const b=e.target.closest('.sm-del');if(!b||blocked())return;const code=b.closest('.sm-row').dataset.code;if(!confirm('Да изтрия ли магазин '+code+'?'))return;const msg=box.querySelector('.sm-msg');try{await api('/stores/delete',{code});await load(root);msg.style.color='#168057';msg.textContent='Магазинът е изтрит.'}catch(x){msg.style.color='#b74750';msg.textContent=x.message}};
  }
- setInterval(mount,250);mount();
+ document.addEventListener('bc-store-modal-ready',mount);
+ mount();
 })();

@@ -1,26 +1,88 @@
-const K={STORE_STATE:'bc-store-status-state',CHECK_STATE:'bc-report-check-state'},W='https://bot-config.erp-admin.workers.dev',C=W+'/config',A=W+'/api',BC='https://ovcharovols.isystems.cloud:41118/OVCHAROVO/*',UT='bc-update-tab-ids',BT='bc-open-bc-tab-ids',DK='bc-device-id',PU='bc-pending-update';let cc=null,ct=0;
-const vp=v=>String(v||'0').split(/[.+-]/)[0].split('.').map(x=>Number(x)||0),vc=(a,b)=>{const A=vp(a),B=vp(b),n=Math.max(A.length,B.length);for(let i=0;i<n;i++){const d=(A[i]||0)-(B[i]||0);if(d)return d>0?1:-1}return 0};
-async function cfg(force=false){if(!force&&cc&&Date.now()-ct<15000)return cc;const r=await fetch(C,{cache:'no-store'}),x=await r.json().catch(()=>({}));if(!r.ok||!x?.ok)throw Error(x?.error||'Не мога да прочета конфигурацията');cc=x;ct=Date.now();return x}
-async function deviceId(){const x=await chrome.storage.local.get(DK);if(x[DK])return x[DK];const id=crypto.randomUUID?crypto.randomUUID():'pc-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2);await chrome.storage.local.set({[DK]:id});return id}
-function vs(c){const current=chrome.runtime.getManifest().version,stable=String(c?.stableVersion||c?.latestVersion||'').trim(),latest=String(c?.latestVersion||stable).trim(),allowed=(Array.isArray(c?.allowedVersions)?c.allowedVersions:[stable]).map(x=>String(x||'').trim()).filter(Boolean),data={currentVersion:current,stableVersion:stable,latestVersion:latest,candidateVersion:String(c?.candidateVersion||'').trim()||null,allowedVersions:allowed,updateAvailable:!!latest&&vc(latest,current)>0,updatedAt:c?.updatedAt||null};if(!allowed.length)return{ok:false,error:'Липсват разрешени версии',code:'VERSION_CONFIG_ERROR',data};if(!allowed.includes(current))return{ok:false,error:`Версия ${current} не е разрешена. Разрешени: ${allowed.join(', ')}.`,code:'UPDATE_REQUIRED',data};return{ok:true,data}}
-async function rememberOpenTab(id){if(!Number.isInteger(id))return;const x=await chrome.storage.session.get(BT),a=Array.isArray(x[BT])?x[BT]:[];if(!a.includes(id))await chrome.storage.session.set({[BT]:[...a,id].slice(-80)})}
-async function forgetOpenTab(id){if(!Number.isInteger(id))return;const x=await chrome.storage.session.get(BT),a=Array.isArray(x[BT])?x[BT]:[],next=a.filter(x=>x!==id);if(next.length!==a.length)await chrome.storage.session.set({[BT]:next})}
-async function currentBcTabIds(){try{return(await chrome.tabs.query({url:[BC]})).map(t=>t.id).filter(Number.isInteger)}catch{return[]}}
-async function rememberTabsForUpdate(id=null){if(Number.isInteger(id))await rememberOpenTab(id);const[sess,local,live]=await Promise.all([chrome.storage.session.get(BT),chrome.storage.local.get(UT),currentBcTabIds()]),a=[...(Array.isArray(sess[BT])?sess[BT]:[]),...(Array.isArray(local[UT])?local[UT]:[]),...live];if(Number.isInteger(id))a.push(id);const ids=[...new Set(a.filter(Number.isInteger))].slice(-80);if(ids.length)await chrome.storage.local.set({[UT]:ids})}
-async function reloadRememberedTabs(){const[x,live]=await Promise.all([chrome.storage.local.get(UT),currentBcTabIds()]),a=[...(Array.isArray(x[UT])?x[UT]:[]),...live],ids=[...new Set(a.filter(Number.isInteger))];await chrome.storage.local.remove(UT);await Promise.allSettled(ids.map(id=>chrome.tabs.reload(id)))}
-function bucket(raw){if(raw&&raw.months&&typeof raw.months==='object')return{months:{...raw.months},selectedMonth:String(raw.selectedMonth||'')};if(raw&&raw.month&&typeof raw==='object')return{months:{[String(raw.month)]:raw},selectedMonth:String(raw.month)};return{months:{},selectedMonth:''}}
-async function stateMessage(key,m){const st=chrome.storage.session,x=await st.get(key),b=bucket(x[key]);if(m.action==='selected')return b.selectedMonth||null;if(m.action==='get'){const month=String(m.month||b.selectedMonth||'');return month?(b.months[month]||null):null}if(m.action==='select'){const month=String(m.month||'');if(month)b.selectedMonth=month;await st.set({[key]:b});return b.selectedMonth||null}if(m.action==='set'){const data=m.data,month=String(m.month||data?.month||b.selectedMonth||'');if(!month)throw Error('Липсва месец за запазване');b.months[month]=data;b.selectedMonth=month;await st.set({[key]:b});return true}if(m.action==='clear'){if(m.month){const month=String(m.month);delete b.months[month];if(b.selectedMonth===month)b.selectedMonth='';await st.set({[key]:b})}else await st.remove(key);return true}throw Error('Невалидна state операция')}
-async function update(c,manual=true,tabId=null){const s=vs(c);if(s.ok&&!s.data.updateAvailable)return{ok:true,data:{...s.data,status:'current'}};await rememberTabsForUpdate(tabId);try{const r=await chrome.runtime.requestUpdateCheck();if(r?.status==='update_available')return{ok:true,data:{...s.data,status:'update_available',availableVersion:r.version||s.data.latestVersion}};if(r?.status==='throttled')return{ok:true,data:{...s.data,status:'throttled'}}}catch{}return{ok:false,error:'Новата версия още не е налична от Chrome Web Store.',code:'UPDATE_UNAVAILABLE',data:s.data}}
-const STARTS_WORK=new Set(['POST /run/start','POST /store-status/create','POST /store-status/post']);
-async function pendingUpdate(){const x=await chrome.storage.local.get(PU);return!!x[PU]}
-async function backendBusy(){try{const r=await api('/health','GET');if(!r.ok)return r.code==='UPDATE_REQUIRED'?false:true;const d=r.data||{};return!!(d.running||d.storeBusy||Number(d.activeJobs)>0||d.draining)}catch{return true}}
-async function tryApplyPendingUpdate(){if(!await pendingUpdate())return false;if(await backendBusy())return false;await rememberTabsForUpdate();await chrome.storage.local.remove(PU);chrome.runtime.reload();return true}
-async function stageUpdate(){await rememberTabsForUpdate();await chrome.storage.local.set({[PU]:true});await tryApplyPendingUpdate()}
-async function api(path,method='GET',body){method=String(method||'GET').toUpperCase();if(STARTS_WORK.has(`${method} ${path}`)&&await pendingUpdate())return{ok:false,error:'Има готова актуализация. Изчаквам текущата операция и няма да стартирам нова.',code:'UPDATE_DRAINING'};let c=await cfg(),s=vs(c);if(!s.ok){cc=null;c=await cfg(true);s=vs(c);if(!s.ok)return s}const id=await deviceId(),r=await fetch(A+path,{method,headers:{'Content-Type':'application/json','X-Client-Version':chrome.runtime.getManifest().version,'X-Device-Id':id},body:body?JSON.stringify(body):undefined,cache:'no-store'}),data=await r.json().catch(()=>({error:`HTTP ${r.status}`}));if(r.status===426){cc=null;const f=await cfg(true).catch(()=>null),st=f?vs(f):null;return{ok:false,error:data?.error||st?.error||'Нужна е актуализация',code:'UPDATE_REQUIRED',data:{...(st?.data||{}),...(data||{})}}}return{ok:r.ok,data,error:r.ok?undefined:(data?.error||`HTTP ${r.status}`)}}
-async function auto(){try{const c=await cfg(true),s=vs(c);if((!s.ok&&s.code==='UPDATE_REQUIRED')||s.data?.updateAvailable)await update(c,false)}catch{}}
-chrome.tabs.onRemoved.addListener(id=>{forgetOpenTab(id).catch(()=>{})});chrome.runtime.onUpdateAvailable.addListener(()=>{stageUpdate().catch(()=>{})});chrome.runtime.onStartup.addListener(()=>{chrome.storage.local.remove(UT).catch(()=>{});auto()});chrome.runtime.onInstalled.addListener(d=>{chrome.storage.local.remove(PU).catch(()=>{});if(d.reason==='update')setTimeout(()=>{reloadRememberedTabs().catch(()=>{})},250);auto()});
-chrome.runtime.onMessage.addListener((m,s,reply)=>{if(!['API','STORE_STATE','CHECK_STATE','VERSION','UPDATE','AUTO_UPDATE','HEARTBEAT'].includes(m.type))return;rememberOpenTab(s.tab?.id).catch(()=>{});(async()=>{try{
- if(m.type==='STORE_STATE'||m.type==='CHECK_STATE')return reply({ok:true,data:await stateMessage(K[m.type],m)});
- if(m.type==='HEARTBEAT'){const r=await api('/client/heartbeat','POST',{page:true});reply(r);if(await pendingUpdate())setTimeout(()=>{tryApplyPendingUpdate().catch(()=>{})},0);return}
- const c=await cfg(m.type==='VERSION'||m.type==='UPDATE'||m.type==='AUTO_UPDATE');if(m.type==='VERSION')return reply(vs(c));if(m.type==='UPDATE'){const r=await update(c,true,s.tab?.id);reply(r);if(r?.ok&&r.data?.status==='update_available')setTimeout(()=>{stageUpdate().catch(()=>{})},50);return}if(m.type==='AUTO_UPDATE'){const r=await update(c,false,s.tab?.id);reply(r);if(r?.ok&&r.data?.status==='update_available')setTimeout(()=>{stageUpdate().catch(()=>{})},50);return}reply(await api(m.path,m.method||'GET',m.body))
- }catch(e){reply({ok:false,error:e.message||'Сървърът не е достъпен',code:'VERSION_CHECK_FAILED'})}})();return true});
+const WORKER = 'https://bot-config.erp-admin.workers.dev';
+const CLIENT_TOKEN_KEY = 'bc-client-token';
+const STATE_KEYS = {STORE_STATE: 'bc-store-status-state', CHECK_STATE: 'bc-report-check-state'};
+
+function bucket(raw) {
+  if (raw && raw.months && typeof raw.months === 'object') {
+    return {months: {...raw.months}, selectedMonth: String(raw.selectedMonth || '')};
+  }
+  if (raw && raw.month && typeof raw === 'object') {
+    return {months: {[String(raw.month)]: raw}, selectedMonth: String(raw.month)};
+  }
+  return {months: {}, selectedMonth: ''};
+}
+
+async function stateMessage(key, message) {
+  const st = chrome.storage.session;
+  const current = await st.get(key);
+  const result = bucket(current[key]);
+  if (message.action === 'selected') return result.selectedMonth || null;
+  if (message.action === 'get') {
+    const month = String(message.month || result.selectedMonth || '');
+    return month ? result.months[month] || null : null;
+  }
+  if (message.action === 'select') {
+    const month = String(message.month || '');
+    if (month) result.selectedMonth = month;
+    await st.set({[key]: result});
+    return result.selectedMonth || null;
+  }
+  if (message.action === 'set') {
+    const data = message.data;
+    const month = String(message.month || data?.month || result.selectedMonth || '');
+    if (!month) throw Error('Липсва месец за запазване');
+    result.months[month] = data;
+    result.selectedMonth = month;
+    await st.set({[key]: result});
+    return true;
+  }
+  if (message.action === 'clear') {
+    if (message.month) {
+      const month = String(message.month);
+      delete result.months[month];
+      if (result.selectedMonth === month) result.selectedMonth = '';
+      await st.set({[key]: result});
+    } else {
+      await st.remove(key);
+    }
+    return true;
+  }
+  throw Error('Невалидна state операция');
+}
+
+async function api(path, method = 'GET', body) {
+  path = String(path || '');
+  method = String(method || 'GET').toUpperCase();
+  if (!path.startsWith('/') || path.startsWith('//') || !['GET', 'POST', 'PUT', 'DELETE'].includes(method)) {
+    return {ok: false, error: 'Невалидна API заявка'};
+  }
+  const saved = await chrome.storage.local.get(CLIENT_TOKEN_KEY);
+  const clientToken = String(saved[CLIENT_TOKEN_KEY] || '').trim();
+  if (!clientToken) {
+    return {ok: false, code: 'TOKEN_MISSING', error: 'Въведи личния ключ от иконата на разширението в Chrome.'};
+  }
+  const response = await fetch(WORKER + '/api' + path, {
+    method,
+    headers: {'Authorization': 'Bearer ' + clientToken, 'Content-Type': 'application/json'},
+    body: body === undefined ? undefined : JSON.stringify(body),
+    cache: 'no-store',
+  });
+  const data = await response.json().catch(() => ({}));
+  return {ok: response.ok, data, error: response.ok ? undefined : (data?.error || `HTTP ${response.status}`), code: data?.code};
+}
+
+chrome.runtime.onMessage.addListener((message, sender, reply) => {
+  if (!message || !['API', 'STORE_STATE', 'CHECK_STATE'].includes(message.type)) return;
+  (async () => {
+    try {
+      if (message.type === 'STORE_STATE' || message.type === 'CHECK_STATE') {
+        reply({ok: true, data: await stateMessage(STATE_KEYS[message.type], message)});
+      } else {
+        reply(await api(message.path, message.method || 'GET', message.body));
+      }
+    } catch (error) {
+      reply({ok: false, error: error?.message || 'Сървърът не е достъпен'});
+    }
+  })();
+  return true;
+});

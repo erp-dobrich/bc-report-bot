@@ -1,3 +1,0 @@
-const fs=require('fs'),p=require('path'),R=__dirname,V=String(require('./version.json').version||'').trim();if(!/^\d+\.\d+\.\d+$/.test(V))throw Error('Невалидна version.json версия');
-const read=f=>fs.readFileSync(p.join(R,f),'utf8'),write=(f,s)=>fs.writeFileSync(p.join(R,f),s),json=f=>JSON.parse(read(f)),save=(f,x)=>write(f,JSON.stringify(x,null,2)+'\n');
-let x=json('frontend/manifest.json');x.version=V;save('frontend/manifest.json',x);x=json('backend/package.json');x.version=V;save('backend/package.json',x);x=json('backend/package-lock.json');x.version=V;if(x.packages?.[''])x.packages[''].version=V;save('backend/package-lock.json',x);console.log('VERSION='+V);

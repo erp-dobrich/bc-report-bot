@@ -1,4 +1,4 @@
-const bc=require('./bc'),{gunzipSync}=require('zlib'),fs=require('fs'),path=require('path'),{getStores,listStores,addStore,setActive,deleteStore}=require('./stores-db');
+const {readDayViaOData}=require('./store-create-odata'),navOData=require('./nav-odata'),bc=require('./bc'),{gunzipSync}=require('zlib'),fs=require('fs'),path=require('path'),{getStores,listStores,addStore,setActive,deleteStore}=require('./stores-db');
 const PAGES=[99001519,99001568],GRID='server:c[3]';
 const sleep=ms=>new Promise(r=>setTimeout(r,ms)),pad=n=>String(n).padStart(2,'0'),sec=t=>((Date.now()-t)/1000).toFixed(2)+'s';
 let checking=false;
@@ -190,6 +190,20 @@ function calendar(scope,unposted,posted,stores){
 
 async function readBatches(page,from,to,stores,size=10){
  const out=Object.fromEntries(stores.map(s=>[s,new Map()])),batches=[];
+ if(navOData.enabled()){
+  const t=Date.now();
+  try{
+   const rows=await navOData.listStatements(page===PAGES[1]?'posted':'open',{stores,from,to});
+   for(const row of rows){
+    const byDate=out[row.store];if(!byDate)continue;
+    const reports=byDate.get(row.date)||[];
+    if(!reports.includes(row.report))reports.push(row.report);
+    byDate.set(row.date,reports);
+   }
+   console.log(`STORE-STATUS ODATA | ${page===PAGES[1]?'осчетоводени':'неосчетоводени'} | отчети: ${rows.length} | ${sec(t)}`);
+   return out;
+  }catch(e){console.log(`STORE-STATUS ODATA | ${e.message} | резервен Playwright`)}
+ }
  for(let i=0;i<stores.length;i+=size)batches.push(stores.slice(i,i+size));
  const parts=await Promise.all(batches.map(async(batch,i)=>{
   console.log(`STORE-STATUS BATCH | ${page===99001568?'осчетоводени':'неосчетоводени'} | ${i+1}/${batches.length} | магазини: ${batch.length}`);
@@ -461,7 +475,6 @@ async function triggerPostingAction(p,s,report,verifiedFrame=null,onAttempt=()=>
    }
   }
  }
- // Резервен вариант: отчетът вече е потвърден; пращаме F9 към елемент от самата карта.
  let frame=verifiedFrame||await reportCardFrame(p,report).catch(()=>null);
  if(!frame&&actual===report)frame=p.mainFrame();
  if(frame){
@@ -515,8 +528,12 @@ async function calculate(p,s,mark=()=>{}){
  await until(()=>{healthy(s);return !s.requests.some(r=>!r.done&&r.list.some(i=>i.interactionName!=='KeepAlive'))&&Date.now()-s.last>100},'BC не приключи обработката',120000);healthy(s);
 }
 function validCreate(body,now=new Date()){
- const stores=getStores(),codes=stores.map(s=>s.code),store=String(body?.store||''),date=String(body?.date||''),empty=Object.fromEntries(codes.map(v=>[v,new Map()])),c=calendar(now,empty,empty,stores),n=dateNumber(date);
- if(!codes.includes(store)||!n||date.slice(3)!==c.month||n>=dateNumber(c.asOf))throw Object.assign(Error('Избери активен магазин и изминал ден от текущия месец'),{status:400});return{store,date};
+ const stores=getStores(),codes=stores.map(s=>s.code),store=String(body?.store||''),date=String(body?.date||''),n=dateNumber(date);
+ let scope=null;
+ try{scope=monthScope(date.slice(3),now)}catch{}
+ const from=scope?dateNumber(scope.from):0,to=scope&&scope.to?dateNumber(scope.to):0;
+ if(!codes.includes(store)||!n||!scope||!from||!to||n<from||n>to)throw Object.assign(Error('Избери активен магазин и позволен ден от текущия или предишния месец'),{status:400});
+ return{store,date};
 }
 function resumeRow(rows,journal,store,date){
  if(!journal)return null;
@@ -572,10 +589,42 @@ async function createReport(body){
  try{
   if(fs.existsSync(key)){try{journal=JSON.parse(fs.readFileSync(key,'utf8'))}catch{throw Error('Неразчетен запис за предишен опит. Провери отчета в BC.')}}
   setProgress(8,'Бърза паралелна проверка на деня');console.log('STORE-CREATE | '+store+' / '+date+' | бърза паралелна проверка');const tCheck=Date.now();
+  const useApi=!journal&&navOData.enabled()&&process.env.STORE_CREATE_ODATA_MODE!=='browser';
+  const initialApi=useApi?readDayViaOData(store,date):Promise.resolve(null);
+  const startBrowserPosted=()=>readDayRows(PAGES[1],date,store,true).then(rows=>({rows}),error=>({error}));
+  let browserPosted=useApi?null:startBrowserPosted();
   p=await bc.getContext().newPage();s=cardCapture(p);const list=capture(p,PAGES[0]);
-  const postedPromise=readDayRows(PAGES[1],date,store,true);
-  const unpostedPromise=(async()=>{await p.goto(listUrl(PAGES[0],date,date,[store]),{waitUntil:'domcontentloaded',timeout:60000});setProgress(13,'Проверка на неосчетоводени');return await waitDayRows(p,list,date,store,{anyOk:!journal})})();
-  const[posted,unpostedRows]=await Promise.all([postedPromise,unpostedPromise]);console.log('STORE-CREATE | проверки '+sec(tCheck));
+  const navigation=p.goto(listUrl(PAGES[0],date,date,[store]),{waitUntil:'domcontentloaded',timeout:60000}).then(()=>null,e=>e);
+  let posted=[],unpostedRows=[],prechecked=false,preparedNewButton=null;
+  const first=await initialApi;
+  if(!first&&!browserPosted)browserPosted=startBrowserPosted();
+  if(first&&(first.posted.length||first.unpostedRows.length)){
+   ({posted,unpostedRows}=first);prechecked=true;
+  }else{
+   const navigationError=await navigation;if(navigationError)throw navigationError;
+   if(first){
+    preparedNewButton=await until(()=>button(p,'Създаване'),'Не намерих „Създаване“');
+    setProgress(13,'Повторна API проверка преди създаване');
+    const latest=await readDayViaOData(store,date);
+    if(latest&&(latest.posted.length||latest.unpostedRows.length)){
+     ({posted,unpostedRows}=latest);prechecked=true;
+    }else if(latest&&list.loaded){
+     const visible=validateDayRows(list,date,store);
+     if(!visible.length){prechecked=true;console.log('STORE-CREATE | API потвърди празен ден; BC списъкът няма противоречащи редове')}
+     else console.log('STORE-CREATE | BC показва отчет, който липсва в OData | резервен Playwright');
+    }else if(latest){console.log('STORE-CREATE | BC списъкът още не е зареден | резервен Playwright')}
+   }
+   if(!prechecked){
+    setProgress(13,'Резервна проверка през Playwright');
+    const [postedResult,browserOpen]=await Promise.all([
+     browserPosted||startBrowserPosted(),
+     waitDayRows(p,list,date,store,{anyOk:!journal})
+    ]);
+    if(postedResult.error)throw postedResult.error;
+    posted=postedResult.rows;unpostedRows=browserOpen;
+   }
+  }
+  console.log('STORE-CREATE | проверки '+sec(tCheck)+(prechecked?' | OData':' | Playwright'));
   if(posted.length){const report=posted.map(r=>r.report).filter(Boolean).join(', ');finishProgress(true,{report});return{store,date,status:'green',existing:true,report}}
   setProgress(18,'Проверка за неосчетоводен отчет');
   const previous=resumeRow(unpostedRows,journal,store,date);
@@ -584,7 +633,7 @@ async function createReport(body){
    await until(()=>{healthy(s);return s.card},'BC не отвори съществуващия отчет');if(s.card.fields.get('No.')?.value!==previous.report)throw Error('Отвори се друг отчет');
   }else{
    if(unpostedRows.length){if(journal)fs.unlinkSync(key);const report=unpostedRows.map(r=>r.report).filter(Boolean).join(', ');finishProgress(true,{report});return{store,date,status:'yellow',existing:true,report}}
-   setProgress(30,'Създаване на нов отчет');const tCard=Date.now(),newButton=await until(()=>button(p,'Създаване'),'Не намерих „Създаване“');
+   setProgress(30,'Създаване на нов отчет');const tCard=Date.now(),newButton=preparedNewButton||await until(()=>button(p,'Създаване'),'Не намерих „Създаване“');
    journal={store,date,started:new Date().toISOString(),phase:'fields'};fs.mkdirSync(LOCKS,{recursive:true});fs.writeFileSync(key,JSON.stringify(journal),{flag:'wx'});started=true;
    await newButton.click({timeout:10000});await until(()=>{healthy(s);return s.card},'BC не отвори новия отчет');console.log('STORE-CREATE | карта '+sec(tCard));
    const tFields=Date.now(),fields=[['Store No.',store,42,'Магазин'],['Trans. Starting Date',date,50,'Начална дата'],['Trans. Ending Date',date,58,'Крайна дата']];
@@ -605,13 +654,13 @@ async function createReport(body){
  }catch(e){
   const report=s?.card?.fields.get('No.')?.value;if(started&&!success)e.message+=' '+(report?'Отчет '+report+'. ':'')+'Възможен е частично създаден отчет; провери го в BC. Нов отчет не се създава автоматично повторно.';
   const old=progress.get(progressKey)||{};progress.set(progressKey,{...old,store,date,active:false,error:e.message,report:report||old.report||''});console.log('STORE-CREATE | ГРЕШКА: '+e.message);throw e;
- }finally{if(p)await p.close().catch(()=>{});activeCreates.delete(progressKey);setTimeout(()=>progress.delete(progressKey),60000)}
+ }finally{if(p)await p.close().catch(()=>{});activeCreates.delete(progressKey);setTimeout(()=>progress.delete(progressKey),60000).unref?.()}
 }
 
 function validPost(body,availability,now=new Date()){
  const{store,date}=validCreate(body,now),report=String(body?.report||'').trim();
  if(!/^\d{6}S\d+$/.test(report)||!report.startsWith(store+'S'))throw Object.assign(Error('Невалиден номер на отчет'),{status:400});
- if(availability?.results?.[report]?.status!=='ok')throw Object.assign(Error('Отчетът не е маркиран като готов за осчетоводяване от последната проверка за наличности'),{status:409});
+ if(availability?.results?.[report]?.status!=='ok'||availability?.results?.[report]?.source!=='odata-strict')throw Object.assign(Error('Пусни нова API проверка. Стари резултати OK не разрешават осчетоводяване.'),{status:409});
  return{store,date,report};
 }
 async function postReport(body,availability){
@@ -637,6 +686,10 @@ async function postReport(body,availability){
   setProgress(12,'Отварям точния отчет от списъка');await openReport(p,report);const opened=await waitReportCard(p,s,report,8000);cardFrame=opened.frame;return opened
  };
  try{
+  setProgress(3,'Повторна проверка на липсите през API');
+  const verified=await require('./nav-shortages-fast').calculate(report);
+  if(verified.status!=='ok'||verified.bad?.length)throw Object.assign(Error('Отчетът не е безопасен за осчетоводяване: '+report+' = '+verified.status.toUpperCase()+(verified.bad?.length?' / '+verified.bad.map(x=>x.item).join(', '):'')),{status:409});
+  console.log('STORE-POST | API повторна проверка | '+report+' = OK | '+(verified.elapsedMs/1000).toFixed(2)+' сек');
   let directOk=false,same=[];
   try{await openDirect();directOk=true}catch(e){
    console.log('STORE-POST | директното отваряне не се потвърди · резервен списък | '+e.message);if(p)await p.close().catch(()=>{});p=null;s=null;list=null;cardFrame=null;
@@ -682,7 +735,6 @@ async function postReport(body,availability){
   try{await clickDialogButton(p,'Не','Не се появи финалният бутон „Не“',30000,report)}catch(e){if(e.message==='Не се появи финалният бутон „Не“'){await clickDialogButton(p,'No','Не се появи финалният бутон „Не“',3000,report)}else throw e}
   await until(async()=>{await throwPostingProblem(p,report);healthy(s);return s.requests.some(r=>r.serial>afterNo&&r.list.some(i=>i.interactionName==='InvokeAction'&&Number(i.params?.systemAction)===390))},'BC не прие бутона „Не“',10000);
   await throwPostingProblem(p,report);healthy(s);
-  // Финалният въпрос + приетото „Не“ са достатъчни. Не правим бавна повторна проверка в „Осчетоводени“.
   await sleep(1500);
   finishProgress(true,{postedReport:report,rowDifferences:[...rowDifferences]});console.log('STORE-POST | '+report+' | ГОТОВО | '+sec(start)+(rowDifferences.length?' | разлика в редовете: '+rowDifferences.join(', '):''));
   return{store,date,report,postedReport:report,status:'green',existing:false,rowDifferences:[...rowDifferences]};

@@ -23,12 +23,14 @@
         "https://ovcharovols.isystems.cloud:41118/OVCHAROVO/*"
       ],
       "js": [
-        "version-guard.js",
-        "content.js",
         "store-status.js",
         "store-manager.js"
       ],
       "run_at": "document_idle"
     }
-  ]
+  ],
+  "action": {
+    "default_title": "BC Report - личен ключ",
+    "default_popup": "popup.html"
+  }
 }
